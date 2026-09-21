@@ -1,11 +1,22 @@
 import csv, re
+import os
+import zipfile
+import gdown
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, CallbackQueryHandler
 
 FILE = "CARMDI.csv"
+
+# --- اذا الملف مش موجود نزلو من الدرايف ---
+if not os.path.exists(FILE):
+    print("Downloading database...")
+    if not os.path.exists("CARMDI.csv.zip"):
+        gdown.download(id="1SJLWIC-JXHptMK_qEru1tMIStI814Mpz", output="CARMDI.csv.zip", quiet=False)
+    with zipfile.ZipFile("CARMDI.csv.zip", 'r') as zip_ref:
+        zip_ref.extractall(".")
+
 DB = list(csv.DictReader(open(FILE, 'r', encoding='utf-8', errors='ignore')))
 print(f"Loaded {len(DB)}")
-
 def clean(v): 
     v=str(v or "").strip()
     return "" if v.lower() in ["none","null"] else v
