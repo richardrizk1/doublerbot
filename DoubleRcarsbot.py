@@ -19,10 +19,23 @@ if not os.path.exists("CARMDI.csv"):
     with zipfile.ZipFile(FILE_ZIP, 'r') as zip_ref:
         zip_ref.extractall(".")
     print("Extracted!")
+    os.remove(FILE_ZIP)
+    print("Zip deleted to save memory")
+print(f"{FILE} ready for search (memory-saving mode)")
+DB = FILE  
 
-print(f"Loading {FILE}...")
-DB = list(csv.DictReader(open(FILE, 'r', encoding='utf-8', errors='ignore')))
-print(f"Loaded {len(DB)} records")
+def search_db(query):
+    query = str(query).lower().strip()
+    results = []
+    with open(FILE, 'r', encoding='utf-8', errors='ignore') as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            if any(query in str(v).lower() for v in row.values()):
+                results.append(row)
+                if len(results) >= 20: 
+                    break
+    return results
+    
 def clean(v):
     v=str(v or "").strip()
     return "" if v.lower() in ["none","null"] else v
