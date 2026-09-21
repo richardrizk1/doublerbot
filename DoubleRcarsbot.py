@@ -6,23 +6,13 @@ FILE = "CARMDI.csv"
 
 def download_file_from_google_drive(id, destination):
     print("Downloading database from Drive...")
-    URL = "https://docs.google.com/uc?export=download"
-    session = requests.Session()
-    response = session.get(URL, params={'id': id}, stream=True)
-    token = None
-    for key, value in response.cookies.items():
-        if key.startswith('download_warning'):
-            token = value
-            break
-    if token:
-        params = {'id': id, 'confirm': token}
-        response = session.get(URL, params=params, stream=True)
-    
-    with open(destination, "wb") as f:
-        for chunk in response.iter_content(32768):
-            if chunk:
-                f.write(chunk)
+    import gdown
+    if os.path.exists(destination):
+        os.remove(destination)
+    url = f"https://drive.google.com/uc?id={id}"
+    gdown.download(url, destination, quiet=False, fuzzy=True)
     print("Download finished!")
+
 if not os.path.exists("CARMDI.csv"):
     if not os.path.exists(FILE_ZIP):
         download_file_from_google_drive(FILE_ID, FILE_ZIP)
@@ -33,8 +23,7 @@ if not os.path.exists("CARMDI.csv"):
 
 print(f"Loading {FILE}...")
 DB = list(csv.DictReader(open(FILE, 'r', encoding='utf-8', errors='ignore')))
-print(f"Loaded {len(DB)} records")
-
+print(f"Loaded {len(DB)} records"
 def clean(v):
     v=str(v or "").strip()
     return "" if v.lower() in ["none","null"] else v
