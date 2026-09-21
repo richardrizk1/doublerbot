@@ -2,7 +2,7 @@ import csv, re
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, CallbackQueryHandler
 
-FILE = "/Users/mymac/Desktop/CARMDI.csv"
+FILE = "CARMDI.csv"
 DB = list(csv.DictReader(open(FILE, 'r', encoding='utf-8', errors='ignore')))
 print(f"Loaded {len(DB)}")
 
