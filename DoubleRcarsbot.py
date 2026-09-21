@@ -10,7 +10,7 @@ def download_file_from_google_drive(id, destination):
     if os.path.exists(destination):
         os.remove(destination)
     url = f"https://drive.google.com/uc?id={id}"
-    gdown.download(url, destination, quiet=False, fuzzy=True)
+    gdown.download(url, destination, quiet=False)
     print("Download finished!")
 
 if not os.path.exists("CARMDI.csv"):
