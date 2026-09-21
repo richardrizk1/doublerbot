@@ -23,7 +23,7 @@ def clean(v):
 
 START = """Hello this is Carmdi Bot! 
 You can ask me to lookup car numbers or phone numbers. 
-For car numbers: write the number followed by the code (e.g. 1111 ز). 
+For car numbers: write the number followed by the code (e.g. 1111 B). 
 For phone numbers: write the number without the extension. (e.g. if the number is 70/123456, send *only* 123456)."""
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
