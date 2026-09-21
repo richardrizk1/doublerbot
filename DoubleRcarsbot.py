@@ -130,7 +130,7 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     for r in results:
         await q.message.reply_text(format_car(r))
 
-TOKEN = "8805137194:AAGPSzQJpBEq9aBKqN1R0P2gApIh1OkcSKE"
+TOKEN = os.getenv("BOT_TOKEN")
 app = Application.builder().token(TOKEN).build()
 app.add_handler(CommandHandler("start", start))
 app.add_handler(CallbackQueryHandler(button))
