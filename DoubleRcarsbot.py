@@ -1,12 +1,12 @@
-import os, zipfile, csv, re, requests
-
+import os, zipfile, csv, re, requests, gdown
+from telegram import Update
+from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 FILE_ID = "1SJLWIC-JXHptMK_qEru1tMlStI814Mpz"
 FILE_ZIP = "CARMDI.csv.zip"
 FILE = "CARMDI.csv"
 
 def download_file_from_google_drive(id, destination):
     print("Downloading database from Drive...")
-    import gdown
     if os.path.exists(destination):
         os.remove(destination)
     gdown.download(id=id, output=destination, quiet=False)
