@@ -1,25 +1,43 @@
-import csv, re
-import os 
-import zipfile
-import gdown
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, CallbackQueryHandler
+import os, zipfile, csv, re, requests
 
+FILE_ID = "1SJLWIC-JXHptMK_qEru1tMIStI814Mpz"
+FILE_ZIP = "CARMDI.csv.zip"
 FILE = "CARMDI.csv"
 
-# --- اذا الملف مش موجود نزلو من الدرايف ---
-if not os.path.exists(FILE):
-    print("Downloading database...")
-    if not os.path.exists("CARMDI.csv.zip"):
-        gdown.download(id="1SJLWIC-JXHptMK_qEru1tMIStI814Mpz", output="CARMDI.csv.zip", quiet=False)
-    with zipfile.ZipFile("CARMDI.csv.zip", 'r') as zip_ref:
+def download_file_from_google_drive(id, destination):
+    print("Downloading database from Drive...")
+    URL = "https://docs.google.com/uc?export=download"
+    session = requests.Session()
+    response = session.get(URL, params={'id': id}, stream=True)
+    token = None
+    for key, value in response.cookies.items():
+        if key.startswith('download_warning'):
+            token = value
+            break
+    if token:
+        params = {'id': id, 'confirm': token}
+        response = session.get(URL, params=params, stream=True)
+    
+    with open(destination, "wb") as f:
+        for chunk in response.iter_content(32768):
+            if chunk:
+                f.write(chunk)
+    print("Download finished!")
+if not os.path.exists("CARMDI.csv"):
+    if not os.path.exists(FILE_ZIP):
+        download_file_from_google_drive(FILE_ID, FILE_ZIP)
+    print("Extracting...")
+    with zipfile.ZipFile(FILE_ZIP, 'r') as zip_ref:
         zip_ref.extractall(".")
+    print("Extracted!")
 
+print(f"Loading {FILE}...")
 DB = list(csv.DictReader(open(FILE, 'r', encoding='utf-8', errors='ignore')))
-print(f"Loaded {len(DB)}")
-def clean(v): 
+print(f"Loaded {len(DB)} records")
+
+def clean(v):
     v=str(v or "").strip()
-    return "" if v.lower() in ["none","null"] else v
+   return "" if v.lower() in ["none","null"] else v 
 
 START = """Hello this is Carmdi Bot! 
 You can ask me to lookup car numbers or phone numbers. 
