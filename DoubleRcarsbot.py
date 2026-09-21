@@ -37,8 +37,8 @@ print(f"Loaded {len(DB)} records")
 
 def clean(v):
     v=str(v or "").strip()
-   return "" if v.lower() in ["none","null"] else v 
-
+    return "" if v.lower() in ["none","null"] else v
+    
 START = """Hello this is Carmdi Bot! 
 You can ask me to lookup car numbers or phone numbers. 
 For car numbers: write the number followed by the code (e.g. 1111 B). 
