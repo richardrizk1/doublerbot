@@ -23,7 +23,7 @@ if not os.path.exists("CARMDI.csv"):
 
 print(f"Loading {FILE}...")
 DB = list(csv.DictReader(open(FILE, 'r', encoding='utf-8', errors='ignore')))
-print(f"Loaded {len(DB)} records"
+print(f"Loaded {len(DB)} records")
 def clean(v):
     v=str(v or "").strip()
     return "" if v.lower() in ["none","null"] else v
