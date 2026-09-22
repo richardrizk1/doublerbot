@@ -127,7 +127,7 @@ def main():
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CallbackQueryHandler(button))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle))
-    app.run_polling(drop_pending_updates=true)
+    app.run_polling(drop_pending_updates=True)
 
 if __name__ == '__main__':
     main()
