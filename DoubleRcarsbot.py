@@ -1,5 +1,6 @@
-import os
+import asyncio
 import logging
+import os
 
 import gdown
 import pandas as pd
@@ -22,9 +23,7 @@ DRIVE_URL = f"https://drive.google.com/uc?export=download&id={DRIVE_FILE_ID}"
 
 
 def normalize_text(value) -> str:
-    if value is None:
-        return ""
-    return str(value).strip().lower()
+    return "" if value is None else str(value).strip().lower()
 
 
 def ensure_database():
@@ -35,58 +34,46 @@ def ensure_database():
         logging.info("Downloading carmdi.csv from Google Drive...")
         output = gdown.download(DRIVE_URL, DATABASE_FILE, quiet=False, fuzzy=True)
         if output and os.path.exists(output):
-            logging.info("Database downloaded to %s", output)
             return output
         if os.path.exists(DATABASE_FILE):
-            logging.info("Database downloaded to %s", DATABASE_FILE)
             return DATABASE_FILE
-    except Exception as exc:
-        logging.exception("Failed to download carmdi.csv: %s", exc)
+    except Exception:
+        logging.exception("Failed to download carmdi.csv")
 
     return None
 
 
 def get_search_columns(mode: str, columns):
     aliases = {
-        "tel": ["phone", "telephone", "tel", "mobile", "portable", "numero_tel", "numero_telephone", "num_tel", "contact"],
-        "plate": ["plate", "plaque", "immatriculation", "numero_plaque", "matricule", "registration", "vehicule"],
-        "name": ["name", "nom", "prenom", "prenom_nom", "nom_prenom", "full_name", "noms", "personne", "client"],
+        "tel": ["phone", "telephone", "tel", "mobile", "portable", "contact"],
+        "plate": ["plate", "plaque", "immatriculation", "matricule", "registration"],
+        "name": ["name", "nom", "prenom", "full_name", "client"],
     }
-
-    candidates = []
     wanted = aliases.get(mode, [])
-    for column in columns:
-        normalized = normalize_text(column)
-        if any(alias in normalized for alias in wanted) or normalized in wanted:
-            candidates.append(column)
-
-    if not candidates:
-        for column in columns:
-            normalized = normalize_text(column)
-            if mode == "tel" and any(token in normalized for token in ["tel", "phone", "contact"]):
-                candidates.append(column)
-            elif mode == "plate" and any(token in normalized for token in ["plate", "plaque", "immat", "matricule"]):
-                candidates.append(column)
-            elif mode == "name" and any(token in normalized for token in ["name", "nom", "prenom"]):
-                candidates.append(column)
-
-    if not candidates:
-        return list(columns)
-
-    return candidates
+    matches = [
+        column for column in columns
+        if any(alias in normalize_text(column) for alias in wanted)
+    ]
+    return matches or list(columns)
 
 
 def load_database():
     path = ensure_database()
     if not path:
+        logging.error("Database file is unavailable")
         return pd.DataFrame()
 
     try:
-        df = pd.read_csv(path, dtype=str, encoding="utf-8-sig", low_memory=False).fillna("")
-        logging.info("Loaded %s rows from %s", len(df), path)
-        return df
-    except Exception as exc:
-        logging.exception("Error reading database %s: %s", path, exc)
+        data = pd.read_csv(
+            path,
+            dtype=str,
+            encoding="utf-8-sig",
+            low_memory=False,
+        ).fillna("")
+        logging.info("Loaded %s rows from %s", len(data), path)
+        return data
+    except Exception:
+        logging.exception("Could not read database %s", path)
         return pd.DataFrame()
 
 
@@ -103,16 +90,10 @@ def search_data(query: str, mode: str):
 
     columns = get_search_columns(mode, list(df.columns))
     results = []
-
     for _, row in df.iterrows():
-        row_values = []
-        for col in columns:
-            row_values.append(normalize_text(row.get(col, "")))
-
-        row_str = " ".join(row_values)
-        if query in row_str:
+        searchable_text = " ".join(normalize_text(row.get(column, "")) for column in columns)
+        if query in searchable_text:
             results.append(row.to_dict())
-
     return results[:5]
 
 
@@ -135,12 +116,12 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
     mode = query.data
     context.user_data["mode"] = mode
-    texts = {
+    prompts = {
         "tel": "Send phone number:",
         "plate": "Send plate number:",
         "name": "Send name (prenom nom):",
     }
-    await query.message.reply_text(texts.get(mode, "Send search:"))
+    await query.message.reply_text(prompts.get(mode, "Send search:"))
 
 
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -150,21 +131,29 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     text = update.message.text.strip()
-    res = search_data(text, mode)
-    if not res:
+    results = search_data(text, mode)
+    if not results:
         await update.message.reply_text(f"No results for: {text}")
         return
 
-    msg = ""
-    for r in res:
-        msg += "\n---\n" + "\n".join(f"{k}: {v}" for k, v in r.items())
-
-    await update.message.reply_text(msg[:4000])
+    message = ""
+    for result in results:
+        message += "\n---\n" + "\n".join(
+            f"{key}: {value}" for key, value in result.items()
+        )
+    await update.message.reply_text(message[:4000])
 
 
 def main():
     if not TOKEN:
-        raise RuntimeError("BOT_TOKEN environment variable is missing. Set it before running the bot.")
+        raise RuntimeError("BOT_TOKEN environment variable is missing")
+
+    # Python 3.14 no longer creates a default event loop automatically.
+    # python-telegram-bot 22.3 still calls asyncio.get_event_loop() internally.
+    try:
+        asyncio.get_event_loop()
+    except RuntimeError:
+        asyncio.set_event_loop(asyncio.new_event_loop())
 
     app = Application.builder().token(TOKEN).build()
     app.add_handler(CommandHandler("start", start))
