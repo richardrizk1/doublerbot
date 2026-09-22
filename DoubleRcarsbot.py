@@ -15,7 +15,7 @@ CSV_PATH = None
 
 @flask_app.route('/')
 def home():
-    return f"Bot running - {CSV_PATH}"
+    return "Bot is running"
 
 def run_flask():
     port = int(os.environ.get("PORT", 10000))
@@ -44,52 +44,90 @@ def load_db():
                 z.extractall(".")
     CSV_PATH = find_csv()
 
+def get_val(row, *keys):
+    for k in keys:
+        for rk in row.keys():
+            if rk.lower() == k.lower() and row[rk]:
+                v = str(row[rk]).strip()
+                if v and v!= "0":
+                    return v
+    return ""
+
 def search(q):
-    q = q.strip().upper().replace(" ", "")
-    if not q or not CSV_PATH:
+    q_clean = q.strip().upper().replace(" ", "")
+    if not q_clean or not CSV_PATH or not os.path.exists(CSV_PATH):
         return []
     res = []
-    with open(CSV_PATH, 'r', encoding='utf-8', errors='ignore') as f:
-        reader = csv.DictReader(f)
-        
-        print(f"Columns: {reader.fieldnames}")
-        for row in reader:
-            full = f"{row.get('ActualNB','').strip()}{row.get('CodeDesc','').strip()}".upper().replace(" ", "")
-            if full == q:
-                res.append(row)
-                if len(res) >= 5:
-                    break
+    try:
+        with open(CSV_PATH, 'r', encoding='utf-8', errors='ignore') as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                actual = get_val(row, 'ActualNB')
+                code = get_val(row, 'CodeDesc')
+                plate_full = f"{actual}{code}".upper().replace(" ", "")
+                tel = get_val(row, 'TelProp', 'TELPROP', 'Phone', 'Mobile').replace(" ", "").replace("+", "")
+
+                if plate_full == q_clean:
+                    res.append(row)
+                    if len(res) >= 3:
+                        break
+                elif q_clean.isdigit() and len(q_clean) >= 6 and q_clean in tel:
+                    res.append(row)
+                    if len(res) >= 3:
+                        break
+    except:
+        pass
     return res
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Send plate like: 2146G")
+    await update.message.reply_text("أرسل رقم اللوحة مثل: 2146 G\nأو 2146G\nأو رقم الهاتف")
 
 async def handle_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    results = search(update.message.text)
+    text = update.message.text.strip()
+    if len(text) < 2:
+        return
+
+    results = search(text)
     if not results:
         await update.message.reply_text("No results found")
         return
+
     for r in results:
-       
-        phone = r.get('TelProp','') or r.get('TELPROP','') or r.get('Phone','') or r.get('Tel','') or r.get('Mobile','') or ""
-        owner = r.get('OwnerName','') or r.get('Name','') or r.get('PropName','') or ""
-        model = r.get('ModelDesc','') or r.get('Model','') or ""
-        year = r.get('YearProd','') or r.get('Year','') or ""
-        
-        text = f"Plate: {r.get('ActualNB','')} {r.get('CodeDesc','')}\n"
-        text += f"Phone: {phone}\n"
+        plate_nb = get_val(r, 'ActualNB')
+        plate_code = get_val(r, 'CodeDesc')
+        phone = get_val(r, 'TelProp', 'Phone', 'Mobile')
+        owner = get_val(r, 'OwnerName', 'PropName', 'Name', 'FullName')
+        model = get_val(r, 'ModelDesc', 'Model', 'Make')
+        year = get_val(r, 'YearProd', 'Year', 'ModelYear')
+        color = get_val(r, 'ColorDesc', 'Color')
+        chassis = get_val(r, 'ChassisNB', 'Chassis')
+        address = get_val(r, 'Address', 'PropAddress')
+
+        msg = f"Plate: {plate_nb} {plate_code}\n"
+        if phone:
+            msg += f"Phone: {phone}\n"
         if owner:
-            text += f"Name: {owner}\n"
+            msg += f"Name: {owner}\n"
         if model:
-            text += f"Car: {model} {year}"
-        
-        await update.message.reply_text(text)
+            msg += f"Car: {model}"
+            if year:
+                msg += f" {year}"
+            msg += "\n"
+        if color:
+            msg += f"Color: {color}\n"
+        if chassis:
+            msg += f"Chassis: {chassis}\n"
+        if address:
+            msg += f"Address: {address}"
+
+        await update.message.reply_text(msg.strip())
 
 if __name__ == "__main__":
     threading.Thread(target=run_flask, daemon=True).start()
     load_db()
     TOKEN = os.getenv("BOT_TOKEN")
-    app = Application.builder().token(TOKEN).build()
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_msg))
-    app.run_polling()
+    if TOKEN:
+        app = Application.builder().token(TOKEN).build()
+        app.add_handler(CommandHandler("start", start))
+        app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_msg))
+        app.run_polling(drop_pending_updates=True)
