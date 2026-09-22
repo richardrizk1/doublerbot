@@ -1,133 +1,107 @@
-import os, glob, zipfile, threading, sys, asyncio, csv
+import os, re, csv, threading
 from flask import Flask
-from telegram import Update
-from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
-import gdown
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import ApplicationBuilder, MessageHandler, CommandHandler, CallbackQueryHandler, filters, ContextTypes
 
-if sys.version_info >= (3, 12):
-    try:
-        asyncio.get_event_loop()
-    except RuntimeError:
-        asyncio.set_event_loop(asyncio.new_event_loop())
-
+TOKEN = os.getenv("BOT_TOKEN")
+CSV_PATH = "CARMdi.csv"
 flask_app = Flask(__name__)
-CSV_PATH = None
 
 @flask_app.route('/')
 def home():
-    return "Bot is running"
+    return "Bot is running!"
+
+def get_val(row, *names):
+    for n in names:
+        for k in row.keys():
+            if k.lower().strip() == n.lower().strip():
+                return str(row[k] or "").strip()
+    return ""
+def norm_phone(s):
+    return re.sub(r'\D', '', str(s))
+def norm_txt(s):
+    return str(s).lower().strip()
+def norm_plate(s):
+    return str(s).upper().replace(" ", "").strip()
+    def search_tel(q):
+    q_phone = norm_phone(q)
+    if len(q_phone) < 3: return []
+    results = []
+    with open(CSV_PATH, 'r', encoding='utf-8', errors='ignore') as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            tel = norm_phone(get_val(row, 'TelProp'))
+            if q_phone in tel:
+                results.append(row)
+                if len(results) >= 5: break
+    return results
+
+def search_plate(q):
+    q_plate = norm_plate(q)
+    results = []
+    with open(CSV_PATH, 'r', encoding='utf-8', errors='ignore') as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            plate = norm_plate(get_val(row, 'ActualNB') + get_val(row, 'CodeDesc'))
+            if q_plate in plate:
+                results.append(row)
+                if len(results) >= 5: break
+    return results
+
+def search_name(q):
+    parts = norm_txt(q).split()
+    results = []
+    with open(CSV_PATH, 'r', encoding='utf-8', errors='ignore') as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            prenom = norm_txt(get_val(row, 'Prenom'))
+            nom = norm_txt(get_val(row, 'Nom'))
+            full = f"{prenom} {nom}"
+            if len(parts) >= 2:
+                if (parts[0] in prenom and parts[1] in nom) or (f"{parts[0]} {parts[1]}" in full):
+                    results.append(row)
+            else:
+                if parts[0] in prenom or parts[0] in nom:
+                    results.append(row)
+            if len(results) >= 5: break
+    return results
+
+def format_row(row):
+    return f"Plate: {get_val(row,'ActualNB')} {get_val(row,'CodeDesc')}\nName: {get_val(row,'Prenom')} {get_val(row,'Nom')}\nMother: {get_val(row,'NomMere')}\nTel: {get_val(row,'TelProp')}\nAge: {get_val(row,'AgeProp')}"
+async def start(update, context):
+    keyboard = [[InlineKeyboardButton("Phone Number", callback_data='tel')],[InlineKeyboardButton("Plate Number", callback_data='plate')],[InlineKeyboardButton("Prenom + Nom", callback_data='name')]]
+    await update.message.reply_text("Choose search type:", reply_markup=InlineKeyboardMarkup(keyboard))
+
+async def button(update, context):
+    q = update.callback_query
+    await q.answer()
+    context.user_data['mode'] = q.data
+    if q.data == 'tel': await q.edit_message_text("Send phone number:")
+    if q.data == 'plate': await q.edit_message_text("Send plate number:")
+    if q.data == 'name': await q.edit_message_text("Send Prenom + Nom:")
+
+async def handle(update, context):
+    q = update.message.text
+    mode = context.user_data.get('mode', 'tel')
+    if mode == 'tel': res = search_tel(q)
+    elif mode == 'plate': res = search_plate(q)
+    else: res = search_name(q)
+    if not res:
+        await update.message.reply_text(f"No results for: {q}")
+        return
+    for r in res:
+        await update.message.reply_text(format_row(r))
 
 def run_flask():
-    port = int(os.environ.get("PORT", 10000))
-    flask_app.run(host='0.0.0.0', port=port)
+    flask_app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 10000)))
 
-FILE_ID = "1LXD6OCDcX-poauodsFjfVSriVPfZbkLJ"
-ZIP_FILE = "CARMDI.csv.zip"
-
-def download_drive_file(file_id, dest):
-    if os.path.exists(dest) and os.path.getsize(dest) > 100000000:
-        return
-    gdown.download(id=file_id, output=dest, quiet=False)
-
-def find_csv():
-    for f in glob.glob("*.csv"):
-        return f
-    return None
-
-def load_db():
-    global CSV_PATH
-    if not find_csv():
-        if not os.path.exists(ZIP_FILE) or os.path.getsize(ZIP_FILE) < 100000000:
-            download_drive_file(FILE_ID, ZIP_FILE)
-        if os.path.exists(ZIP_FILE):
-            with zipfile.ZipFile(ZIP_FILE, "r") as z:
-                z.extractall(".")
-    CSV_PATH = find_csv()
-
-def get_val(row, *keys):
-    for k in keys:
-        for rk in row.keys():
-            if rk.lower() == k.lower() and row[rk]:
-                v = str(row[rk]).strip()
-                if v and v!= "0":
-                    return v
-    return ""
-
-def search(q):
-    q_clean = q.strip().upper().replace(" ", "")
-    if not q_clean or not CSV_PATH or not os.path.exists(CSV_PATH):
-        return []
-    res = []
-    try:
-        with open(CSV_PATH, 'r', encoding='utf-8', errors='ignore') as f:
-            reader = csv.DictReader(f)
-            for row in reader:
-                actual = get_val(row, 'ActualNB')
-                code = get_val(row, 'CodeDesc')
-                plate_full = f"{actual}{code}".upper().replace(" ", "")
-                tel = get_val(row, 'TelProp', 'TELPROP', 'Phone', 'Mobile').replace(" ", "").replace("+", "")
-
-                if plate_full == q_clean:
-                    res.append(row)
-                    if len(res) >= 3:
-                        break
-                elif q_clean.isdigit() and len(q_clean) >= 6 and q_clean in tel:
-                    res.append(row)
-                    if len(res) >= 3:
-                        break
-    except:
-        pass
-    return res
-
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("أرسل رقم اللوحة مثل: 2146 G\nأو 2146G\nأو رقم الهاتف")
-
-async def handle_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = update.message.text.strip()
-    if len(text) < 2:
-        return
-
-    results = search(text)
-    if not results:
-        await update.message.reply_text("No results found")
-        return
-
-    for r in results:
-        plate_nb = get_val(r, 'ActualNB')
-        plate_code = get_val(r, 'CodeDesc')
-        phone = get_val(r, 'TelProp', 'Phone', 'Mobile')
-        owner = get_val(r, 'OwnerName', 'PropName', 'Name', 'FullName')
-        model = get_val(r, 'ModelDesc', 'Model', 'Make')
-        year = get_val(r, 'YearProd', 'Year', 'ModelYear')
-        color = get_val(r, 'ColorDesc', 'Color')
-        chassis = get_val(r, 'ChassisNB', 'Chassis')
-        address = get_val(r, 'Address', 'PropAddress')
-
-        msg = f"Plate: {plate_nb} {plate_code}\n"
-        if phone:
-            msg += f"Phone: {phone}\n"
-        if owner:
-            msg += f"Name: {owner}\n"
-        if model:
-            msg += f"Car: {model}"
-            if year:
-                msg += f" {year}"
-            msg += "\n"
-        if color:
-            msg += f"Color: {color}\n"
-        if chassis:
-            msg += f"Chassis: {chassis}\n"
-        if address:
-            msg += f"Address: {address}"
-
-        await update.message.reply_text(msg.strip())
-
-if __name__ == "__main__":
+def main():
     threading.Thread(target=run_flask, daemon=True).start()
-    load_db()
-    TOKEN = os.getenv("BOT_TOKEN")
-    if TOKEN:
-        app = Application.builder().token(TOKEN).build()
-        app.add_handler(CommandHandler("start", start))
-        app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_msg))
-        app.run_polling(drop_pending_updates=True)
+    app = ApplicationBuilder().token(TOKEN).build()
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CallbackQueryHandler(button))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle))
+    app.run_polling()
+
+if __name__ == '__main__':
+    main()
