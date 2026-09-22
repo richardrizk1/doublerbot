@@ -1,8 +1,7 @@
-python-telegram-bot
-Flask
-requests
+python-telegram-bot==20.7
+pandas
 gdown
-beautifulsoup4
+
 
 
 
