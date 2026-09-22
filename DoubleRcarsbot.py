@@ -15,10 +15,7 @@ CSV_PATH = None
 
 @flask_app.route('/')
 def home():
-    size = "No DB"
-    if CSV_PATH and os.path.exists(CSV_PATH):
-        size = f"{os.path.getsize(CSV_PATH)//1024//1024}MB"
-    return f"Bot running - DB: {size} - Path: {CSV_PATH}"
+    return f"Bot running - {CSV_PATH}"
 
 def run_flask():
     port = int(os.environ.get("PORT", 10000))
@@ -29,11 +26,8 @@ ZIP_FILE = "CARMDI.csv.zip"
 
 def download_drive_file(file_id, dest):
     if os.path.exists(dest) and os.path.getsize(dest) > 100000000:
-        print(f"File exists {os.path.getsize(dest)} bytes, skipping download")
         return
-    print(f"Downloading {dest}...")
     gdown.download(id=file_id, output=dest, quiet=False)
-    print(f"Downloaded: {os.path.getsize(dest)} bytes")
 
 def find_csv():
     for f in glob.glob("*.csv"):
@@ -42,64 +36,60 @@ def find_csv():
 
 def load_db():
     global CSV_PATH
-    csv_file = find_csv()
-    if not csv_file:
+    if not find_csv():
         if not os.path.exists(ZIP_FILE) or os.path.getsize(ZIP_FILE) < 100000000:
             download_drive_file(FILE_ID, ZIP_FILE)
         if os.path.exists(ZIP_FILE):
-            print("Extracting...")
             with zipfile.ZipFile(ZIP_FILE, "r") as z:
-                print(f"ZIP: {z.namelist()}")
                 z.extractall(".")
     CSV_PATH = find_csv()
-    if CSV_PATH:
-        print(f"CSV ready: {CSV_PATH} size={os.path.getsize(CSV_PATH)//1024//1024}MB")
-    else:
-        print("No CSV found!")
-
-def clean(t):
-    return "".join(c for c in str(t).upper() if c.isalnum())
 
 def search(q):
-    q = clean(q)
-    if not q or not CSV_PATH or not os.path.exists(CSV_PATH):
+    q = q.strip().upper().replace(" ", "")
+    if not q or not CSV_PATH:
         return []
     res = []
-    try:
-        with open(CSV_PATH, 'r', encoding='utf-8', errors='ignore') as f:
-            reader = csv.DictReader(f)
-            for row in reader:
-                full = clean(f"{row.get('ActualNB','')}{row.get('CodeDesc','')}")
-                tel = clean(row.get('TelProp',''))
-                if q in full or q in tel:
-                    res.append(row)
-                    if len(res) >= 10:
-                        break
-    except Exception as e:
-        print(f"Search error: {e}")
+    with open(CSV_PATH, 'r', encoding='utf-8', errors='ignore') as f:
+        reader = csv.DictReader(f)
+        
+        print(f"Columns: {reader.fieldnames}")
+        for row in reader:
+            full = f"{row.get('ActualNB','').strip()}{row.get('CodeDesc','').strip()}".upper().replace(" ", "")
+            if full == q:
+                res.append(row)
+                if len(res) >= 5:
+                    break
     return res
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(f"DB ready: {CSV_PATH}\nSend plate number")
+    await update.message.reply_text("Send plate like: 2146G")
 
 async def handle_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    results = search(update.message.text.strip())
+    results = search(update.message.text)
     if not results:
         await update.message.reply_text("No results found")
         return
-    for r in results[:3]:
-        msg = f"{r.get('ActualNB','')} {r.get('CodeDesc','')}\n{r.get('TelProp','')}\n{r.get('ModelDesc','')} {r.get('YearProd','')}"
-        await update.message.reply_text(msg)
+    for r in results:
+       
+        phone = r.get('TelProp','') or r.get('TELPROP','') or r.get('Phone','') or r.get('Tel','') or r.get('Mobile','') or ""
+        owner = r.get('OwnerName','') or r.get('Name','') or r.get('PropName','') or ""
+        model = r.get('ModelDesc','') or r.get('Model','') or ""
+        year = r.get('YearProd','') or r.get('Year','') or ""
+        
+        text = f"Plate: {r.get('ActualNB','')} {r.get('CodeDesc','')}\n"
+        text += f"Phone: {phone}\n"
+        if owner:
+            text += f"Name: {owner}\n"
+        if model:
+            text += f"Car: {model} {year}"
+        
+        await update.message.reply_text(text)
 
 if __name__ == "__main__":
     threading.Thread(target=run_flask, daemon=True).start()
     load_db()
     TOKEN = os.getenv("BOT_TOKEN")
-    if not TOKEN:
-        print("BOT_TOKEN not set!")
-    else:
-        app = Application.builder().token(TOKEN).build()
-        app.add_handler(CommandHandler("start", start))
-        app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_msg))
-        print("Bot running...")
-        app.run_polling()
+    app = Application.builder().token(TOKEN).build()
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_msg))
+    app.run_polling()
