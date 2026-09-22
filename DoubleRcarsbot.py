@@ -1,6 +1,6 @@
 import os, zipfile, csv, re, requests, gdown, threading
 from flask import Flask
-from telegram import Update
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
 
 FILE_ID = "1SJLWIC-JXHptMK_qEru1tMlStI814Mpz"
@@ -100,15 +100,14 @@ async def search(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     # بحث عادي
-    results = []
-    if code:
-        results = [r for r in DB if str(r.get('ActualNB','') or r.get('ActualNo','')).strip()==num and clean(r.get('CodeDesc',''))==code]
-    if not results:
-        results = [r for r in DB if str(r.get('ActualNB','') or r.get('ActualNo','')).strip()==num]
-    if not results and len(num)>=5:
-        full = raw if "/" in raw else num
-        results = [r for r in DB if full in str(r.get('TelProp','')) or num in str(r.get('TelProp',''))][:3]
-
+   results = []
+if code:
+    results = [r for r in DB if isinstance(r, dict) and str(r.get('ActualNB','') or r.get('ActualNo','')).strip()==num and clean(r.get('CodeDesc',''))==code]
+if not results:
+    results = [r for r in DB if isinstance(r, dict) and str(r.get('ActualNB','') or r.get('ActualNo','')).strip()==num]
+if not results and len(num)>=5:
+    full = raw if "/" in raw else num
+    results = [r for r in DB if isinstance(r, dict) and (full in str(r.get('TelProp','')) or num in str(r.get('TelProp','')) )][:3]
     if not results:
         await update.message.reply_text("No results found.")
         return
@@ -120,10 +119,10 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
     data = q.data.replace("tel:","")
-    results = [r for r in DB if data in str(r.get('TelProp',''))][:3]
+    results = [r for r in DB if isinstance(r, dict) and data in str(r.get('TelProp',''))][:3]
     if not results:
         num = re.sub(r'[^0-9]', '', data)
-        results = [r for r in DB if num in str(r.get('TelProp',''))][:3]
+        results = [r for r in DB if isinstance(r, dict) and num in str(r.get('TelProp',''))][:3]
     if not results:
         await q.message.reply_text("No results found.")
         return
