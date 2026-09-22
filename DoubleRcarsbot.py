@@ -4,72 +4,60 @@ import pandas as pd
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 
-# هيدا السيرفر الوهمي لـ Render
-app_flask = Flask(__name__)
-@app_flask.route('/')
+flask_app = Flask(__name__)
+@flask_app.route('/')
 def home():
-    return "Bot is running"
-
+    return f"Bot running - {len(DB)} records"
 def run_flask():
     port = int(os.environ.get("PORT", 10000))
-    app_flask.run(host='0.0.0.0', port=port)
-
+    flask_app.run(host='0.0.0.0', port=port)
 threading.Thread(target=run_flask, daemon=True).start()
+
 FILE_ID = "1SJLWIC-JXHptMK_qEru1tMIStI814Mpz"
 ZIP_FILE = "CARMDI.csv.zip"
 DB = []
 
 def download_drive_file(file_id, dest):
-    print(f"Downloading {dest} with workaround...")
+    print(f"Downloading {dest}...")
     URL = "https://docs.google.com/uc?export=download"
     session = requests.Session()
     response = session.get(URL, params={'id': file_id}, stream=True)
-    
     token = None
     for key, value in response.cookies.items():
         if key.startswith('download_warning'):
             token = value
             break
-    
     if token:
-        params = {'id': file_id, 'confirm': token}
-        response = session.get(URL, params=params, stream=True)
-
+        response = session.get(URL, params={'id': file_id, 'confirm': token}, stream=True)
     with open(dest, "wb") as f:
         for chunk in response.iter_content(32768):
             if chunk:
                 f.write(chunk)
     print(f"Downloaded size: {os.path.getsize(dest)} bytes")
 
-def find_csv_file():
+def find_csv():
     for f in glob.glob("*.csv"):
         return f
     return None
 
 def load_db():
     global DB
-    csv_file = find_csv_file()
-    
+    csv_file = find_csv()
     if not csv_file:
-        if not os.path.exists(ZIP_FILE):
+        if not os.path.exists(ZIP_FILE) or os.path.getsize(ZIP_FILE) < 1000:
             download_drive_file(FILE_ID, ZIP_FILE)
-        
         if os.path.exists(ZIP_FILE) and os.path.getsize(ZIP_FILE) > 1000:
             try:
                 with zipfile.ZipFile(ZIP_FILE, "r") as z:
                     print(f"ZIP contains: {z.namelist()}")
                     z.extractall(".")
-                print("Unzipped")
             except Exception as e:
                 print(f"Unzip error: {e}")
-    
-    csv_file = find_csv_file()
-    print(f"Using CSV file: {csv_file}")
-
+    csv_file = find_csv()
+    print(f"Using CSV: {csv_file}")
     if not csv_file:
         print("No CSV found!")
         return
-
     try:
         df = pd.read_csv(csv_file, dtype=str, low_memory=False).fillna("")
         DB = df.to_dict(orient="records")
@@ -78,19 +66,20 @@ def load_db():
         print(f"DB Error: {e}")
 
 def clean(t):
-    t = str(t).upper()
-    return "".join(c for c in t if c.isalnum())
+    return "".join(c for c in str(t).upper() if c.isalnum())
 
 def search(q):
     q = clean(q)
-    if not q: return []
+    if not q:
+        return []
     res = []
     for row in DB:
         full = clean(f"{row.get('ActualNB','')}{row.get('CodeDesc','')}")
         tel = clean(row.get('TelProp',''))
         if q in full or q in tel:
             res.append(row)
-            if len(res) >= 10: break
+            if len(res) >= 10:
+                break
     return res
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
