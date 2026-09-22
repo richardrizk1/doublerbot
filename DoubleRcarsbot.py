@@ -1,17 +1,24 @@
-import os, glob, zipfile, requests, threading
+import os, glob, zipfile, requests, threading, asyncio, sys
 from flask import Flask
 import pandas as pd
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 
+# Fix for Python 3.14 on Render
+if sys.version_info >= (3, 12):
+    try:
+        asyncio.get_event_loop()
+    except RuntimeError:
+        asyncio.set_event_loop(asyncio.new_event_loop())
+
 flask_app = Flask(__name__)
 @flask_app.route('/')
 def home():
     return f"Bot running - {len(DB)} records"
+
 def run_flask():
     port = int(os.environ.get("PORT", 10000))
     flask_app.run(host='0.0.0.0', port=port)
-threading.Thread(target=run_flask, daemon=True).start()
 
 FILE_ID = "1SJLWIC-JXHptMK_qEru1tMIStI814Mpz"
 ZIP_FILE = "CARMDI.csv.zip"
@@ -94,10 +101,15 @@ async def handle_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
         msg = f"{r.get('ActualNB','')} {r.get('CodeDesc','')}\n{r.get('TelProp','')}\n{r.get('ModelDesc','')} {r.get('YearProd','')}"
         await update.message.reply_text(msg)
 
-load_db()
-TOKEN = os.getenv("BOT_TOKEN")
-app = Application.builder().token(TOKEN).build()
-app.add_handler(CommandHandler("start", start))
-app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_msg))
-print("Bot running...")
-app.run_polling()
+if __name__ == "__main__":
+    load_db()
+    threading.Thread(target=run_flask, daemon=True).start()
+    TOKEN = os.getenv("BOT_TOKEN")
+    if not TOKEN:
+        print("ERROR: BOT_TOKEN not set!")
+    else:
+        app = Application.builder().token(TOKEN).build()
+        app.add_handler(CommandHandler("start", start))
+        app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_msg))
+        print("Bot running...")
+        app.run_polling()
