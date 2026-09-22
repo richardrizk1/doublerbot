@@ -18,12 +18,14 @@ from telegram.ext import (
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
-TOKEN = os.getenv("BOT_TOKEN")
-DATABASE_FILE = os.getenv("CARMDI_FILE", "carmdi.csv")
+# Strip accidental spaces/newlines when the token is pasted into Render.
+TOKEN = os.getenv("BOT_TOKEN", "").strip()
+DATABASE_FILE = os.getenv("CARMDI_FILE", "carmdi.csv").strip() or "carmdi.csv"
 DRIVE_FILE_ID = "1LXD6OCDcX-poauodsFjfVSriVPfZbkLJ"
 DRIVE_URL = f"https://drive.google.com/uc?export=download&id={DRIVE_FILE_ID}"
 
 health_app = Flask(__name__)
+
 
 @health_app.get("/")
 def health_check():
@@ -45,7 +47,8 @@ def ensure_database():
 
     try:
         logging.info("Downloading carmdi.csv from Google Drive...")
-        output = gdown.download(DRIVE_URL, DATABASE_FILE, quiet=False, fuzzy=True)
+        # gdown 6.x does not support the fuzzy keyword when passed to download().
+        output = gdown.download(DRIVE_URL, DATABASE_FILE, quiet=False)
         if output and os.path.exists(output):
             logging.info("Database downloaded to %s", output)
             return output
@@ -79,14 +82,14 @@ def load_database():
         return pd.DataFrame()
 
     try:
-        df = pd.read_csv(
+        data = pd.read_csv(
             path,
             dtype=str,
             encoding="utf-8-sig",
             low_memory=False,
         ).fillna("")
-        logging.info("Loaded %s rows from %s", len(df), path)
-        return df
+        logging.info("Loaded %s rows from %s", len(data), path)
+        return data
     except Exception:
         logging.exception("Could not read database %s", path)
         return pd.DataFrame()
