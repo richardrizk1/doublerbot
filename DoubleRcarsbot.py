@@ -5,11 +5,11 @@ from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 
 FILE_ID = "1SJLWIC-JXHptMK_qEru1tMIStI814Mpz"
-ZIP_FILE = "CAR.csv.zip"
+ZIP_FILE = "CARMDI.csv.zip"
 DB = []
 
 def find_csv_file():
-    # دور على اي CSV موجود
+    
     for f in glob.glob("*.csv"):
         return f
     return None
