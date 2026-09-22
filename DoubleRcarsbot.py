@@ -4,6 +4,7 @@ import os
 import re
 import threading
 import unicodedata
+import zipfile
 
 import gdown
 import pandas as pd
@@ -23,10 +24,10 @@ logging.basicConfig(
     format="%(asctime)s - %(levelname)s - %(message)s",
 )
 
-# Strip accidental spaces/newlines when the token is pasted into Render.
 TOKEN = os.getenv("BOT_TOKEN", "").strip()
-DATABASE_FILE = os.getenv("CARMDI_FILE", "carmdi.csv").strip() or "carmdi.csv"
-DRIVE_FILE_ID = "1LXD6OCDcX-poauodsFjfVSriVPfZbkLJ"
+DATABASE_FILE = os.getenv("CARMDI_FILE", "CARMDI.csv").strip() or "CARMDI.csv"
+ARCHIVE_FILE = os.getenv("CARMDI_ARCHIVE", "CARMDI.csv.zip").strip() or "CARMDI.csv.zip"
+DRIVE_FILE_ID = "1SJLWIC-JXHptMK_qEru1tMlStI814Mpz"
 DRIVE_URL = f"https://drive.google.com/uc?export=download&id={DRIVE_FILE_ID}"
 
 health_app = Flask(__name__)
@@ -64,19 +65,47 @@ def ensure_database():
         return DATABASE_FILE
 
     try:
-        logging.info("Downloading carmdi.csv from Google Drive...")
-        # gdown 6.x does not support the fuzzy keyword in download().
-        output = gdown.download(DRIVE_URL, DATABASE_FILE, quiet=False)
-        if output and os.path.exists(output):
-            logging.info("Database downloaded to %s", output)
-            return output
-        if os.path.exists(DATABASE_FILE):
-            logging.info("Database downloaded to %s", DATABASE_FILE)
-            return DATABASE_FILE
-    except Exception:
-        logging.exception("Failed to download carmdi.csv")
+        logging.info("Downloading %s from Google Drive...", ARCHIVE_FILE)
+        output = gdown.download(DRIVE_URL, ARCHIVE_FILE, quiet=False)
+        archive_path = output or ARCHIVE_FILE
 
-    return None
+        if not os.path.exists(archive_path):
+            logging.error("Google Drive download did not create %s", archive_path)
+            return None
+
+        if not zipfile.is_zipfile(archive_path):
+            logging.error("Downloaded file is not a valid ZIP archive: %s", archive_path)
+            return None
+
+        with zipfile.ZipFile(archive_path, "r") as archive:
+            csv_members = [
+                member for member in archive.namelist()
+                if member.lower().endswith(".csv")
+                and not member.endswith("/")
+            ]
+
+            if not csv_members:
+                logging.error("No CSV file was found inside %s", archive_path)
+                return None
+
+            # Prefer CARMDI.csv when the archive contains multiple CSV files.
+            member_name = next(
+                (
+                    member for member in csv_members
+                    if os.path.basename(member).lower() == "carmdi.csv"
+                ),
+                csv_members[0],
+            )
+
+            with archive.open(member_name) as source, open(DATABASE_FILE, "wb") as target:
+                target.write(source.read())
+
+        logging.info("Extracted %s to %s", member_name, DATABASE_FILE)
+        return DATABASE_FILE if os.path.exists(DATABASE_FILE) else None
+
+    except Exception:
+        logging.exception("Failed to download or extract %s", ARCHIVE_FILE)
+        return None
 
 
 def load_database():
@@ -86,7 +115,6 @@ def load_database():
         return pd.DataFrame()
 
     try:
-        # Detect comma, semicolon, tab, and other common delimiters.
         data = pd.read_csv(
             path,
             dtype=str,
@@ -106,7 +134,6 @@ def load_database():
 
 df = load_database()
 
-# These are the actual column names shown in the CARMDI screens.
 SEARCH_COLUMNS = {
     "tel": ["TelProp"],
     "plate": ["NoRegProp"],
@@ -115,7 +142,6 @@ SEARCH_COLUMNS = {
 
 
 def find_column(name: str):
-    """Find a CSV column case-insensitively and ignoring formatting."""
     wanted = normalize_text(name)
     for column in df.columns:
         if normalize_text(column) == wanted:
@@ -132,24 +158,18 @@ def search_data(query: str, mode: str):
     if not query_normalized:
         return []
 
-    configured_columns = SEARCH_COLUMNS.get(mode, [])
     columns = [
         actual_column
-        for configured_column in configured_columns
+        for configured_column in SEARCH_COLUMNS.get(mode, [])
         if (actual_column := find_column(configured_column)) is not None
     ]
 
     if not columns:
-        logging.error(
-            "Search columns for mode %s were not found. Available columns: %s",
-            mode,
-            list(df.columns),
-        )
+        logging.error("Search columns for mode %s were not found: %s", mode, list(df.columns))
         return []
 
     results = []
     for _, row in df.iterrows():
-        # Joining Prenom and Nom allows searching either one or both together.
         searchable_text = normalize_text(
             " ".join(str(row.get(column, "")) for column in columns)
         )
