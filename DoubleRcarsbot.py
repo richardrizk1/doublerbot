@@ -120,6 +120,8 @@ def run_flask():
     flask_app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 10000)))
 
 def main():
+    import asyncio
+    asyncio.set_event_loop(asyncio.new_event_loop())
     threading.Thread(target=run_flask, daemon=True).start()
     app = ApplicationBuilder().token(TOKEN).build()
     app.add_handler(CommandHandler("start", start))
