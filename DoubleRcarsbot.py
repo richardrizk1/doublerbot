@@ -45,4 +45,4 @@ def load_db():
         print(f"Error: {e}")
 
 def clean(t): 
-    return re.sub(r'[^A-Z
+    return re.sub(r'[^A-Z0-9]", "", str(t).upper())
