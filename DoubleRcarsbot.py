@@ -1,6 +1,5 @@
-import os, glob, zipfile, threading, sys, asyncio
+import os, glob, zipfile, threading, sys, asyncio, csv
 from flask import Flask
-import pandas as pd
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 import gdown
@@ -12,9 +11,14 @@ if sys.version_info >= (3, 12):
         asyncio.set_event_loop(asyncio.new_event_loop())
 
 flask_app = Flask(__name__)
+CSV_PATH = None
+
 @flask_app.route('/')
 def home():
-    return f"Bot running - {len(DB)} records"
+    size = "No DB"
+    if CSV_PATH and os.path.exists(CSV_PATH):
+        size = f"{os.path.getsize(CSV_PATH)//1024//1024}MB"
+    return f"Bot running - DB: {size} - Path: {CSV_PATH}"
 
 def run_flask():
     port = int(os.environ.get("PORT", 10000))
@@ -22,12 +26,14 @@ def run_flask():
 
 FILE_ID = "1LXD6OCDcX-poauodsFjfVSriVPfZbkLJ"
 ZIP_FILE = "CARMDI.csv.zip"
-DB = []
 
 def download_drive_file(file_id, dest):
+    if os.path.exists(dest) and os.path.getsize(dest) > 100000000:
+        print(f"File exists {os.path.getsize(dest)} bytes, skipping download")
+        return
     print(f"Downloading {dest}...")
     gdown.download(id=file_id, output=dest, quiet=False)
-    print(f"Downloaded size: {os.path.getsize(dest)} bytes")
+    print(f"Downloaded: {os.path.getsize(dest)} bytes")
 
 def find_csv():
     for f in glob.glob("*.csv"):
@@ -35,49 +41,46 @@ def find_csv():
     return None
 
 def load_db():
-    global DB
+    global CSV_PATH
     csv_file = find_csv()
     if not csv_file:
-        if not os.path.exists(ZIP_FILE) or os.path.getsize(ZIP_FILE) < 5000:
+        if not os.path.exists(ZIP_FILE) or os.path.getsize(ZIP_FILE) < 100000000:
             download_drive_file(FILE_ID, ZIP_FILE)
         if os.path.exists(ZIP_FILE):
-            try:
-                with zipfile.ZipFile(ZIP_FILE, "r") as z:
-                    print(f"ZIP contains: {z.namelist()}")
-                    z.extractall(".")
-            except Exception as e:
-                print(f"Unzip error: {e}")
-    csv_file = find_csv()
-    print(f"Using CSV: {csv_file}")
-    if not csv_file:
+            print("Extracting...")
+            with zipfile.ZipFile(ZIP_FILE, "r") as z:
+                print(f"ZIP: {z.namelist()}")
+                z.extractall(".")
+    CSV_PATH = find_csv()
+    if CSV_PATH:
+        print(f"CSV ready: {CSV_PATH} size={os.path.getsize(CSV_PATH)//1024//1024}MB")
+    else:
         print("No CSV found!")
-        return
-    try:
-        df = pd.read_csv(csv_file, dtype=str, low_memory=False).fillna("")
-        DB = df.to_dict(orient="records")
-        print(f"DB loaded: {len(DB)} records from {csv_file}")
-    except Exception as e:
-        print(f"DB Error: {e}")
 
 def clean(t):
     return "".join(c for c in str(t).upper() if c.isalnum())
 
 def search(q):
     q = clean(q)
-    if not q:
+    if not q or not CSV_PATH or not os.path.exists(CSV_PATH):
         return []
     res = []
-    for row in DB:
-        full = clean(f"{row.get('ActualNB','')}{row.get('CodeDesc','')}")
-        tel = clean(row.get('TelProp',''))
-        if q in full or q in tel:
-            res.append(row)
-            if len(res) >= 10:
-                break
+    try:
+        with open(CSV_PATH, 'r', encoding='utf-8', errors='ignore') as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                full = clean(f"{row.get('ActualNB','')}{row.get('CodeDesc','')}")
+                tel = clean(row.get('TelProp',''))
+                if q in full or q in tel:
+                    res.append(row)
+                    if len(res) >= 10:
+                        break
+    except Exception as e:
+        print(f"Search error: {e}")
     return res
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(f"DB loaded: {len(DB)} records. Send plate number")
+    await update.message.reply_text(f"DB ready: {CSV_PATH}\nSend plate number")
 
 async def handle_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
     results = search(update.message.text.strip())
@@ -89,11 +92,11 @@ async def handle_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(msg)
 
 if __name__ == "__main__":
-    load_db()
     threading.Thread(target=run_flask, daemon=True).start()
+    load_db()
     TOKEN = os.getenv("BOT_TOKEN")
     if not TOKEN:
-        print("ERROR: BOT_TOKEN not set!")
+        print("BOT_TOKEN not set!")
     else:
         app = Application.builder().token(TOKEN).build()
         app.add_handler(CommandHandler("start", start))
