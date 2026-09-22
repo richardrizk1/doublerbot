@@ -1,133 +1,67 @@
 import os
-import re
-import csv
-import threading
-from flask import Flask
+import logging
+import pandas as pd
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import ApplicationBuilder, MessageHandler, CommandHandler, CallbackQueryHandler, filters, ContextTypes
+from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, ContextTypes, filters
 
+logging.basicConfig(level=logging.INFO)
 TOKEN = os.getenv("BOT_TOKEN")
-CSV_PATH = "CARMdi.csv"
-flask_app = Flask(__name__)
+EXCEL_FILE = os.getenv("EXCEL_FILE", "data.xlsx")
 
-@flask_app.route('/')
-def home():
-    return "Bot is running!"
+df = pd.DataFrame()
+try:
+    df = pd.read_excel(EXCEL_FILE, dtype=str).fillna("")
+    print(f"Loaded {len(df)} rows")
+except Exception as e:
+    print(f"Error loading excel: {e}")
 
-def get_val(row, *names):
-    for n in names:
-        for k in row.keys():
-            if k.lower().strip() == n.lower().strip():
-                return str(row[k] or "").strip()
-    return ""
-
-def norm_phone(s):
-    return re.sub(r'\D', '', str(s))
-
-def norm_txt(s):
-    return str(s).lower().strip()
-
-def norm_plate(s):
-    return str(s).upper().replace(" ", "").strip()
-
-def search_tel(q):
-    qp = norm_phone(q)
-    if len(qp) < 3:
-        return []
-    res = []
-    with open(CSV_PATH, 'r', encoding='utf-8', errors='ignore') as f:
-        reader = csv.DictReader(f)
-        for row in reader:
-            if qp in norm_phone(get_val(row, 'TelProp')):
-                res.append(row)
-                if len(res) >= 5:
-                    break
-    return res
-
-def search_plate(q):
-    qp = norm_plate(q)
-    if not qp:
-        return []
-    res = []
-    with open(CSV_PATH, 'r', encoding='utf-8', errors='ignore') as f:
-        reader = csv.DictReader(f)
-        for row in reader:
-            plate = norm_plate(get_val(row, 'ActualNB') + get_val(row, 'CodeDesc'))
-            if qp in plate:
-                res.append(row)
-                if len(res) >= 5:
-                    break
-    return res
-
-def search_name(q):
-    parts = norm_txt(q).split()
-    if not parts:
-        return []
-    res = []
-    with open(CSV_PATH, 'r', encoding='utf-8', errors='ignore') as f:
-        reader = csv.DictReader(f)
-        for row in reader:
-            prenom = norm_txt(get_val(row, 'Prenom'))
-            nom = norm_txt(get_val(row, 'Nom'))
-            if len(parts) >= 2:
-                if (parts[0] in prenom and parts[1] in nom) or (parts[0] in nom and parts[1] in prenom):
-                    res.append(row)
-            else:
-                if parts[0] in prenom or parts[0] in nom:
-                    res.append(row)
-            if len(res) >= 5:
-                break
-    return res
-
-def format_row(row):
-    return f"Plate: {get_val(row,'ActualNB')} {get_val(row,'CodeDesc')}\nName: {get_val(row,'Prenom')} {get_val(row,'Nom')}\nMother: {get_val(row,'NomMere')}\nTel: {get_val(row,'TelProp')}"
+def search_data(query, mode):
+    if df.empty: return []
+    query = str(query).lower().strip()
+    results = []
+    for _, row in df.iterrows():
+        row_str = " ".join([str(v).lower() for v in row.values])
+        if query in row_str:
+            results.append(row.to_dict())
+    return results[:5]
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [
-        [InlineKeyboardButton("Phone Number", callback_data='tel')],
-        [InlineKeyboardButton("Plate Number", callback_data='plate')],
-        [InlineKeyboardButton("Prenom + Nom", callback_data='name')],
+        [InlineKeyboardButton("📞 Phone Number", callback_data="tel"),
+         InlineKeyboardButton("🚗 Plate Number", callback_data="plate")],
+        [InlineKeyboardButton("👤 Prenom+Nom", callback_data="name")]
     ]
     await update.message.reply_text("Choose search type:", reply_markup=InlineKeyboardMarkup(keyboard))
 
-async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query
-    await q.answer()
-    context.user_data['mode'] = q.data
-    if q.data == 'tel':
-        await q.edit_message_text("Send phone number:")
-    elif q.data == 'plate':
-        await q.edit_message_text("Send plate number:")
-    else:
-        await q.edit_message_text("Send Prenom + Nom:")
+async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    mode = query.data
+    context.user_data["mode"] = mode
+    texts = {"tel": "Send phone number:", "plate": "Send plate number:", "name": "Send name (prenom nom):"}
+    await query.message.reply_text(texts.get(mode, "Send search:"))
 
-async def handle(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.message.text
-    mode = context.user_data.get('mode', 'tel')
-    if mode == 'tel':
-        res = search_tel(q)
-    elif mode == 'plate':
-        res = search_plate(q)
-    else:
-        res = search_name(q)
-    if not res:
-        await update.message.reply_text(f"No results for: {q}. Use /start")
+async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    mode = context.user_data.get("mode")
+    if not mode:
+        await update.message.reply_text("Please press /start and choose type first")
         return
+    text = update.message.text.strip()
+    res = search_data(text, mode)
+    if not res:
+        await update.message.reply_text(f"No results for: {text}")
+        return
+    msg = ""
     for r in res:
-        await update.message.reply_text(format_row(r))
-
-def run_flask():
-    flask_app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 10000)))
+        msg += "\n---\n" + "\n".join([f"{k}: {v}" for k,v in r.items()])
+    await update.message.reply_text(msg[:4000])
 
 def main():
-    import asyncio
-    asyncio.set_event_loop(asyncio.new_event_loop())
-    threading.Thread(target=run_flask, daemon=True).start()
-    app = ApplicationBuilder().token(TOKEN).build()
+    app = Application.builder().token(TOKEN).build()
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CallbackQueryHandler(button))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle))
-    app.run_polling(drop_pending_updates=True)
+    app.add_handler(CallbackQueryHandler(button_click))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
+    app.run_polling(drop_pending_updates=True, allowed_updates=Update.ALL_TYPES)
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()
