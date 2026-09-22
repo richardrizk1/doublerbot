@@ -1,10 +1,10 @@
-import os, glob, zipfile, requests, threading, asyncio, sys
+import os, glob, zipfile, threading, sys, asyncio
 from flask import Flask
 import pandas as pd
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
+import gdown
 
-# Fix for Python 3.14 on Render
 if sys.version_info >= (3, 12):
     try:
         asyncio.get_event_loop()
@@ -20,26 +20,13 @@ def run_flask():
     port = int(os.environ.get("PORT", 10000))
     flask_app.run(host='0.0.0.0', port=port)
 
-FILE_ID = "1SJLWIC-JXHptMK_qEru1tMIStI814Mpz"
+FILE_ID = "1LXD6OCDcX-poauodsFjfVSriVPfZbkLJ"
 ZIP_FILE = "CARMDI.csv.zip"
 DB = []
 
 def download_drive_file(file_id, dest):
     print(f"Downloading {dest}...")
-    URL = "https://docs.google.com/uc?export=download"
-    session = requests.Session()
-    response = session.get(URL, params={'id': file_id}, stream=True)
-    token = None
-    for key, value in response.cookies.items():
-        if key.startswith('download_warning'):
-            token = value
-            break
-    if token:
-        response = session.get(URL, params={'id': file_id, 'confirm': token}, stream=True)
-    with open(dest, "wb") as f:
-        for chunk in response.iter_content(32768):
-            if chunk:
-                f.write(chunk)
+    gdown.download(id=file_id, output=dest, quiet=False)
     print(f"Downloaded size: {os.path.getsize(dest)} bytes")
 
 def find_csv():
@@ -51,9 +38,9 @@ def load_db():
     global DB
     csv_file = find_csv()
     if not csv_file:
-        if not os.path.exists(ZIP_FILE) or os.path.getsize(ZIP_FILE) < 1000:
+        if not os.path.exists(ZIP_FILE) or os.path.getsize(ZIP_FILE) < 5000:
             download_drive_file(FILE_ID, ZIP_FILE)
-        if os.path.exists(ZIP_FILE) and os.path.getsize(ZIP_FILE) > 1000:
+        if os.path.exists(ZIP_FILE):
             try:
                 with zipfile.ZipFile(ZIP_FILE, "r") as z:
                     print(f"ZIP contains: {z.namelist()}")
