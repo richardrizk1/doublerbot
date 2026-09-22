@@ -1,8 +1,20 @@
-import os, glob, zipfile, requests
+import os, glob, zipfile, requests, threading
+from flask import Flask
 import pandas as pd
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 
+# هيدا السيرفر الوهمي لـ Render
+app_flask = Flask(__name__)
+@app_flask.route('/')
+def home():
+    return "Bot is running"
+
+def run_flask():
+    port = int(os.environ.get("PORT", 10000))
+    app_flask.run(host='0.0.0.0', port=port)
+
+threading.Thread(target=run_flask, daemon=True).start()
 FILE_ID = "1SJLWIC-JXHptMK_qEru1tMIStI814Mpz"
 ZIP_FILE = "CARMDI.csv.zip"
 DB = []
