@@ -1,7 +1,7 @@
 import os
 import logging
-from pathlib import Path
 
+import gdown
 import pandas as pd
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
@@ -17,26 +17,33 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(
 
 TOKEN = os.getenv("BOT_TOKEN")
 DATABASE_FILE = os.getenv("CARMDI_FILE", "carmdi.csv")
-
-
-def find_database_file() -> str:
-    candidates = [
-        os.getenv("CARMDI_FILE"),
-        "carmdi.csv",
-        os.path.join("data", "carmdi.csv"),
-        str(Path.cwd() / "carmdi.csv"),
-        str(Path.cwd() / "data" / "carmdi.csv"),
-    ]
-    for path in candidates:
-        if path and os.path.exists(path):
-            return path
-    return DATABASE_FILE
+DRIVE_FILE_ID = "1LXD6OCDcX-poauodsFjfVSriVPfZbkLJ"
+DRIVE_URL = f"https://drive.google.com/uc?export=download&id={DRIVE_FILE_ID}"
 
 
 def normalize_text(value) -> str:
     if value is None:
         return ""
     return str(value).strip().lower()
+
+
+def ensure_database():
+    if os.path.exists(DATABASE_FILE):
+        return DATABASE_FILE
+
+    try:
+        logging.info("Downloading carmdi.csv from Google Drive...")
+        output = gdown.download(DRIVE_URL, DATABASE_FILE, quiet=False, fuzzy=True)
+        if output and os.path.exists(output):
+            logging.info("Database downloaded to %s", output)
+            return output
+        if os.path.exists(DATABASE_FILE):
+            logging.info("Database downloaded to %s", DATABASE_FILE)
+            return DATABASE_FILE
+    except Exception as exc:
+        logging.exception("Failed to download carmdi.csv: %s", exc)
+
+    return None
 
 
 def get_search_columns(mode: str, columns):
@@ -54,7 +61,6 @@ def get_search_columns(mode: str, columns):
             candidates.append(column)
 
     if not candidates:
-        # fallback: use generic columns if the CSV has a single expected field for the mode
         for column in columns:
             normalized = normalize_text(column)
             if mode == "tel" and any(token in normalized for token in ["tel", "phone", "contact"]):
@@ -65,24 +71,26 @@ def get_search_columns(mode: str, columns):
                 candidates.append(column)
 
     if not candidates:
-        # If no mode-specific column is detected, search all columns as a last resort.
         return list(columns)
 
     return candidates
 
 
-def load_database(path: str) -> pd.DataFrame:
+def load_database():
+    path = ensure_database()
+    if not path:
+        return pd.DataFrame()
+
     try:
-        df = pd.read_csv(path, dtype=str, encoding="utf-8-sig").fillna("")
+        df = pd.read_csv(path, dtype=str, encoding="utf-8-sig", low_memory=False).fillna("")
         logging.info("Loaded %s rows from %s", len(df), path)
         return df
     except Exception as exc:
-        logging.exception("Error loading database %s: %s", path, exc)
+        logging.exception("Error reading database %s: %s", path, exc)
         return pd.DataFrame()
 
 
-DATABASE_PATH = find_database_file()
-df = load_database(DATABASE_PATH)
+df = load_database()
 
 
 def search_data(query: str, mode: str):
@@ -99,8 +107,7 @@ def search_data(query: str, mode: str):
     for _, row in df.iterrows():
         row_values = []
         for col in columns:
-            cell = row.get(col, "")
-            row_values.append(normalize_text(cell))
+            row_values.append(normalize_text(row.get(col, "")))
 
         row_str = " ".join(row_values)
         if query in row_str:
