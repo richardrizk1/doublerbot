@@ -60,9 +60,14 @@ def normalize_text(value) -> str:
         character for character in value
         if not unicodedata.combining(character)
     )
-    # Keep all Unicode letters/numbers, including Arabic names, and remove
-    # punctuation/spaces so phone and plate formatting differences do not matter.
     return "".join(character for character in value if character.isalnum())
+
+
+def normalize_phone(value) -> str:
+    """Return only phone digits so formatting does not affect matching."""
+    if value is None:
+        return ""
+    return "".join(character for character in str(value) if character.isdigit())
 
 
 def clean_column_name(value) -> str:
@@ -102,12 +107,15 @@ def ensure_database():
                 csv_members[0],
             )
 
-            # Copy in small blocks instead of source.read(), which can allocate
-            # hundreds of MB and exceed Render's memory limit.
             with archive.open(member_name) as source, open(DATABASE_FILE, "wb") as target:
                 shutil.copyfileobj(source, target, length=1024 * 1024)
 
-        logging.info("Extracted %s to %s (%d bytes)", member_name, DATABASE_FILE, os.path.getsize(DATABASE_FILE))
+        logging.info(
+            "Extracted %s to %s (%d bytes)",
+            member_name,
+            DATABASE_FILE,
+            os.path.getsize(DATABASE_FILE),
+        )
         return DATABASE_FILE if os.path.getsize(DATABASE_FILE) > 0 else None
 
     except Exception:
@@ -125,7 +133,6 @@ def detect_csv_format(path):
     except csv.Error:
         delimiter = ","
 
-    first_line = sample.splitlines()[0] if sample.splitlines() else ""
     logging.info("Detected CSV delimiter: %r", delimiter)
     return delimiter
 
@@ -166,7 +173,11 @@ def search_data(query: str, mode: str):
         logging.warning("Search attempted, but database is unavailable")
         return []
 
-    query_normalized = normalize_text(query)
+    if mode == "tel":
+        query_normalized = normalize_phone(query)
+    else:
+        query_normalized = normalize_text(query)
+
     if not query_normalized:
         return []
 
@@ -176,19 +187,38 @@ def search_data(query: str, mode: str):
         if (actual_column := find_column(configured_column)) is not None
     ]
     if not columns:
-        logging.error("Search columns for mode %s were not found: %s", mode, database_columns)
+        logging.error(
+            "Search columns for mode %s were not found: %s",
+            mode,
+            database_columns,
+        )
         return []
 
     delimiter = detect_csv_format(database_path)
     results = []
     try:
-        with open(database_path, "r", encoding="utf-8-sig", errors="replace", newline="") as file:
+        with open(
+            database_path,
+            "r",
+            encoding="utf-8-sig",
+            errors="replace",
+            newline="",
+        ) as file:
             reader = csv.DictReader(file, delimiter=delimiter)
             for row in reader:
-                searchable_text = normalize_text(
-                    " ".join(str(row.get(column, "")) for column in columns)
-                )
-                if query_normalized in searchable_text:
+                if mode == "tel":
+                    # Phone searches use an exact suffix match. For example,
+                    # entering 123456 matches only numbers ending in 123456,
+                    # not numbers that merely contain 123456 in the middle.
+                    phone_value = normalize_phone(row.get(columns[0], ""))
+                    matches = phone_value.endswith(query_normalized)
+                else:
+                    searchable_text = normalize_text(
+                        " ".join(str(row.get(column, "")) for column in columns)
+                    )
+                    matches = query_normalized in searchable_text
+
+                if matches:
                     results.append(dict(row))
                     if len(results) >= MAX_RESULTS:
                         break
@@ -226,7 +256,7 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
     mode = query.data
     context.user_data["mode"] = mode
     prompts = {
-        "tel": "Send phone number:",
+        "tel": "Send phone number or its last digits:",
         "plate": "Send plate number:",
         "name": "Send first name, last name, or both:",
     }
