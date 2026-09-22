@@ -1,9 +1,11 @@
 import asyncio
 import logging
 import os
+import threading
 
 import gdown
 import pandas as pd
+from flask import Flask
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application,
@@ -21,6 +23,17 @@ DATABASE_FILE = os.getenv("CARMDI_FILE", "carmdi.csv")
 DRIVE_FILE_ID = "1LXD6OCDcX-poauodsFjfVSriVPfZbkLJ"
 DRIVE_URL = f"https://drive.google.com/uc?export=download&id={DRIVE_FILE_ID}"
 
+health_app = Flask(__name__)
+
+@health_app.get("/")
+def health_check():
+    return "Bot is running", 200
+
+
+def run_health_server():
+    port = int(os.getenv("PORT", "10000"))
+    health_app.run(host="0.0.0.0", port=port)
+
 
 def normalize_text(value) -> str:
     return "" if value is None else str(value).strip().lower()
@@ -34,8 +47,10 @@ def ensure_database():
         logging.info("Downloading carmdi.csv from Google Drive...")
         output = gdown.download(DRIVE_URL, DATABASE_FILE, quiet=False, fuzzy=True)
         if output and os.path.exists(output):
+            logging.info("Database downloaded to %s", output)
             return output
         if os.path.exists(DATABASE_FILE):
+            logging.info("Database downloaded to %s", DATABASE_FILE)
             return DATABASE_FILE
     except Exception:
         logging.exception("Failed to download carmdi.csv")
@@ -64,14 +79,14 @@ def load_database():
         return pd.DataFrame()
 
     try:
-        data = pd.read_csv(
+        df = pd.read_csv(
             path,
             dtype=str,
             encoding="utf-8-sig",
             low_memory=False,
         ).fillna("")
-        logging.info("Loaded %s rows from %s", len(data), path)
-        return data
+        logging.info("Loaded %s rows from %s", len(df), path)
+        return df
     except Exception:
         logging.exception("Could not read database %s", path)
         return pd.DataFrame()
@@ -90,10 +105,14 @@ def search_data(query: str, mode: str):
 
     columns = get_search_columns(mode, list(df.columns))
     results = []
+
     for _, row in df.iterrows():
-        searchable_text = " ".join(normalize_text(row.get(column, "")) for column in columns)
+        searchable_text = " ".join(
+            normalize_text(row.get(column, "")) for column in columns
+        )
         if query in searchable_text:
             results.append(row.to_dict())
+
     return results[:5]
 
 
@@ -141,26 +160,32 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         message += "\n---\n" + "\n".join(
             f"{key}: {value}" for key, value in result.items()
         )
+
     await update.message.reply_text(message[:4000])
 
 
-def main():
+async def run_bot():
     if not TOKEN:
         raise RuntimeError("BOT_TOKEN environment variable is missing")
 
-    # Python 3.14 no longer creates a default event loop automatically.
-    # python-telegram-bot 22.3 still calls asyncio.get_event_loop() internally.
-    try:
-        asyncio.get_event_loop()
-    except RuntimeError:
-        asyncio.set_event_loop(asyncio.new_event_loop())
+    threading.Thread(target=run_health_server, daemon=True).start()
 
     app = Application.builder().token(TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CallbackQueryHandler(button_click))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
-    app.run_polling(drop_pending_updates=True, allowed_updates=Update.ALL_TYPES)
+
+    await app.initialize()
+    await app.start()
+    await app.updater.start_polling(
+        drop_pending_updates=True,
+        allowed_updates=Update.ALL_TYPES,
+    )
+    await asyncio.Event().wait()
+
+    await app.stop()
+    await app.shutdown()
 
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(run_bot())
