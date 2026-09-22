@@ -1,6 +1,5 @@
-import os, glob, zipfile
+import os, glob, zipfile, requests
 import pandas as pd
-import gdown
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 
@@ -8,8 +7,29 @@ FILE_ID = "1SJLWIC-JXHptMK_qEru1tMIStI814Mpz"
 ZIP_FILE = "CARMDI.csv.zip"
 DB = []
 
-def find_csv_file():
+def download_drive_file(file_id, dest):
+    print(f"Downloading {dest} with workaround...")
+    URL = "https://docs.google.com/uc?export=download"
+    session = requests.Session()
+    response = session.get(URL, params={'id': file_id}, stream=True)
     
+    token = None
+    for key, value in response.cookies.items():
+        if key.startswith('download_warning'):
+            token = value
+            break
+    
+    if token:
+        params = {'id': file_id, 'confirm': token}
+        response = session.get(URL, params=params, stream=True)
+
+    with open(dest, "wb") as f:
+        for chunk in response.iter_content(32768):
+            if chunk:
+                f.write(chunk)
+    print(f"Downloaded size: {os.path.getsize(dest)} bytes")
+
+def find_csv_file():
     for f in glob.glob("*.csv"):
         return f
     return None
@@ -20,11 +40,9 @@ def load_db():
     
     if not csv_file:
         if not os.path.exists(ZIP_FILE):
-            print(f"Downloading {ZIP_FILE}...")
-            gdown.download(id=FILE_ID, output=ZIP_FILE, quiet=False)
-            print("Download done")
+            download_drive_file(FILE_ID, ZIP_FILE)
         
-        if os.path.exists(ZIP_FILE):
+        if os.path.exists(ZIP_FILE) and os.path.getsize(ZIP_FILE) > 1000:
             try:
                 with zipfile.ZipFile(ZIP_FILE, "r") as z:
                     print(f"ZIP contains: {z.namelist()}")
@@ -46,28 +64,21 @@ def load_db():
         print(f"DB loaded: {len(DB)} records from {csv_file}")
     except Exception as e:
         print(f"DB Error: {e}")
-        DB = []
 
 def clean(t):
     t = str(t).upper()
-    out = ""
-    for c in t:
-        if c.isalnum():
-            out += c
-    return out
+    return "".join(c for c in t if c.isalnum())
 
 def search(q):
     q = clean(q)
-    if not q:
-        return []
+    if not q: return []
     res = []
     for row in DB:
         full = clean(f"{row.get('ActualNB','')}{row.get('CodeDesc','')}")
         tel = clean(row.get('TelProp',''))
         if q in full or q in tel:
             res.append(row)
-            if len(res) >= 10:
-                break
+            if len(res) >= 10: break
     return res
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
