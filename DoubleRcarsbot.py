@@ -1,50 +1,52 @@
-import os, zipfile, requests
+import os, glob, zipfile
 import pandas as pd
+import gdown
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 
 FILE_ID = "1SJLWIC-JXHptMK_qEru1tMIStI814Mpz"
-CSV_FILE = "CAR.csv"
 ZIP_FILE = "CAR.csv.zip"
 DB = []
 
-def download_from_drive(file_id, dest):
-    print(f"Downloading {dest}...")
-    url = f"https://drive.google.com/uc?export=download&id={file_id}"
-    s = requests.Session()
-    r = s.get(url, stream=True)
-    for k, v in r.cookies.items():
-        if k.startswith("download_warning"):
-            url = f"https://drive.google.com/uc?export=download&confirm={v}&id={file_id}"
-            r = s.get(url, stream=True)
-            break
-    with open(dest, "wb") as f:
-        for chunk in r.iter_content(32768):
-            if chunk:
-                f.write(chunk)
-    print("Download done")
+def find_csv_file():
+    # دور على اي CSV موجود
+    for f in glob.glob("*.csv"):
+        return f
+    return None
 
 def load_db():
     global DB
-    if not os.path.exists(CSV_FILE):
+    csv_file = find_csv_file()
+    
+    if not csv_file:
         if not os.path.exists(ZIP_FILE):
-            download_from_drive(FILE_ID, ZIP_FILE)
+            print(f"Downloading {ZIP_FILE}...")
+            gdown.download(id=FILE_ID, output=ZIP_FILE, quiet=False)
+            print("Download done")
+        
         if os.path.exists(ZIP_FILE):
             try:
                 with zipfile.ZipFile(ZIP_FILE, "r") as z:
+                    print(f"ZIP contains: {z.namelist()}")
                     z.extractall(".")
                 print("Unzipped")
-            except:
-                try:
-                    os.rename(ZIP_FILE, CSV_FILE)
-                except:
-                    pass
+            except Exception as e:
+                print(f"Unzip error: {e}")
+    
+    csv_file = find_csv_file()
+    print(f"Using CSV file: {csv_file}")
+
+    if not csv_file:
+        print("No CSV found!")
+        return
+
     try:
-        df = pd.read_csv(CSV_FILE, dtype=str, low_memory=False).fillna("")
+        df = pd.read_csv(csv_file, dtype=str, low_memory=False).fillna("")
         DB = df.to_dict(orient="records")
-        print(f"DB loaded: {len(DB)} records")
+        print(f"DB loaded: {len(DB)} records from {csv_file}")
     except Exception as e:
-        print(f"Error: {e}")
+        print(f"DB Error: {e}")
+        DB = []
 
 def clean(t):
     t = str(t).upper()
