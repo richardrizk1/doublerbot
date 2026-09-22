@@ -2,6 +2,8 @@ python-telegram-bot==22.3
 requests
 flask
 gdown
+pandas
+openpyxl
 
 
 
