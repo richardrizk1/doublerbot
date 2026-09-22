@@ -1,13 +1,14 @@
 import asyncio
+import csv
 import logging
 import os
 import re
+import shutil
 import threading
 import unicodedata
 import zipfile
 
 import gdown
-import pandas as pd
 from flask import Flask
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import (
@@ -29,6 +30,12 @@ DATABASE_FILE = os.getenv("CARMDI_FILE", "CARMDI.csv").strip() or "CARMDI.csv"
 ARCHIVE_FILE = os.getenv("CARMDI_ARCHIVE", "CARMDI.csv.zip").strip() or "CARMDI.csv.zip"
 DRIVE_FILE_ID = "1SJLWIC-JXHptMK_qEru1tMlStI814Mpz"
 DRIVE_URL = f"https://drive.google.com/uc?export=download&id={DRIVE_FILE_ID}"
+SEARCH_COLUMNS = {
+    "tel": ["TelProp"],
+    "plate": ["NoRegProp"],
+    "name": ["Prenom", "Nom"],
+}
+MAX_RESULTS = 5
 
 health_app = Flask(__name__)
 
@@ -44,16 +51,18 @@ def run_health_server():
 
 
 def normalize_text(value) -> str:
-    """Normalize accents, spaces, punctuation, and letter case for searching."""
+    """Normalize case, accents, whitespace, and punctuation for searching."""
     if value is None:
         return ""
 
-    value = unicodedata.normalize("NFKD", str(value).strip().lower())
+    value = unicodedata.normalize("NFKD", str(value).strip().casefold())
     value = "".join(
         character for character in value
         if not unicodedata.combining(character)
     )
-    return re.sub(r"[^a-z0-9]", "", value)
+    # Keep all Unicode letters/numbers, including Arabic names, and remove
+    # punctuation/spaces so phone and plate formatting differences do not matter.
+    return "".join(character for character in value if character.isalnum())
 
 
 def clean_column_name(value) -> str:
@@ -61,7 +70,7 @@ def clean_column_name(value) -> str:
 
 
 def ensure_database():
-    if os.path.exists(DATABASE_FILE):
+    if os.path.exists(DATABASE_FILE) and os.path.getsize(DATABASE_FILE) > 0:
         return DATABASE_FILE
 
     try:
@@ -72,7 +81,6 @@ def ensure_database():
         if not os.path.exists(archive_path):
             logging.error("Google Drive download did not create %s", archive_path)
             return None
-
         if not zipfile.is_zipfile(archive_path):
             logging.error("Downloaded file is not a valid ZIP archive: %s", archive_path)
             return None
@@ -80,15 +88,12 @@ def ensure_database():
         with zipfile.ZipFile(archive_path, "r") as archive:
             csv_members = [
                 member for member in archive.namelist()
-                if member.lower().endswith(".csv")
-                and not member.endswith("/")
+                if member.lower().endswith(".csv") and not member.endswith("/")
             ]
-
             if not csv_members:
                 logging.error("No CSV file was found inside %s", archive_path)
                 return None
 
-            # Prefer CARMDI.csv when the archive contains multiple CSV files.
             member_name = next(
                 (
                     member for member in csv_members
@@ -97,61 +102,68 @@ def ensure_database():
                 csv_members[0],
             )
 
+            # Copy in small blocks instead of source.read(), which can allocate
+            # hundreds of MB and exceed Render's memory limit.
             with archive.open(member_name) as source, open(DATABASE_FILE, "wb") as target:
-                target.write(source.read())
+                shutil.copyfileobj(source, target, length=1024 * 1024)
 
-        logging.info("Extracted %s to %s", member_name, DATABASE_FILE)
-        return DATABASE_FILE if os.path.exists(DATABASE_FILE) else None
+        logging.info("Extracted %s to %s (%d bytes)", member_name, DATABASE_FILE, os.path.getsize(DATABASE_FILE))
+        return DATABASE_FILE if os.path.getsize(DATABASE_FILE) > 0 else None
 
     except Exception:
         logging.exception("Failed to download or extract %s", ARCHIVE_FILE)
         return None
 
 
+def detect_csv_format(path):
+    with open(path, "r", encoding="utf-8-sig", errors="replace", newline="") as file:
+        sample = file.read(1024 * 1024)
+
+    try:
+        dialect = csv.Sniffer().sniff(sample, delimiters=",;\t|")
+        delimiter = dialect.delimiter
+    except csv.Error:
+        delimiter = ","
+
+    first_line = sample.splitlines()[0] if sample.splitlines() else ""
+    logging.info("Detected CSV delimiter: %r", delimiter)
+    return delimiter
+
+
 def load_database():
     path = ensure_database()
     if not path:
         logging.error("Database file is unavailable")
-        return pd.DataFrame()
+        return None, []
 
     try:
-        data = pd.read_csv(
-            path,
-            dtype=str,
-            encoding="utf-8-sig",
-            sep=None,
-            engine="python",
-            keep_default_na=False,
-        ).fillna("")
-        data.columns = [clean_column_name(column) for column in data.columns]
-        logging.info("Loaded %s rows from %s", len(data), path)
-        logging.info("CSV columns: %s", list(data.columns))
-        return data
+        delimiter = detect_csv_format(path)
+        with open(path, "r", encoding="utf-8-sig", errors="replace", newline="") as file:
+            reader = csv.reader(file, delimiter=delimiter)
+            columns = [clean_column_name(column) for column in next(reader, [])]
+
+        logging.info("CSV columns: %s", columns)
+        logging.info("Database ready at %s; rows will be searched in streaming mode", path)
+        return path, columns
     except Exception:
-        logging.exception("Could not read database %s", path)
-        return pd.DataFrame()
+        logging.exception("Could not inspect database %s", path)
+        return None, []
 
 
-df = load_database()
-
-SEARCH_COLUMNS = {
-    "tel": ["TelProp"],
-    "plate": ["NoRegProp"],
-    "name": ["Prenom", "Nom"],
-}
+database_path, database_columns = load_database()
 
 
 def find_column(name: str):
     wanted = normalize_text(name)
-    for column in df.columns:
+    for column in database_columns:
         if normalize_text(column) == wanted:
             return column
     return None
 
 
 def search_data(query: str, mode: str):
-    if df.empty:
-        logging.warning("Search attempted, but database is empty")
+    if not database_path:
+        logging.warning("Search attempted, but database is unavailable")
         return []
 
     query_normalized = normalize_text(query)
@@ -163,20 +175,26 @@ def search_data(query: str, mode: str):
         for configured_column in SEARCH_COLUMNS.get(mode, [])
         if (actual_column := find_column(configured_column)) is not None
     ]
-
     if not columns:
-        logging.error("Search columns for mode %s were not found: %s", mode, list(df.columns))
+        logging.error("Search columns for mode %s were not found: %s", mode, database_columns)
         return []
 
+    delimiter = detect_csv_format(database_path)
     results = []
-    for _, row in df.iterrows():
-        searchable_text = normalize_text(
-            " ".join(str(row.get(column, "")) for column in columns)
-        )
-        if query_normalized in searchable_text:
-            results.append(row.to_dict())
-        if len(results) >= 5:
-            break
+    try:
+        with open(database_path, "r", encoding="utf-8-sig", errors="replace", newline="") as file:
+            reader = csv.DictReader(file, delimiter=delimiter)
+            for row in reader:
+                searchable_text = normalize_text(
+                    " ".join(str(row.get(column, "")) for column in columns)
+                )
+                if query_normalized in searchable_text:
+                    results.append(dict(row))
+                    if len(results) >= MAX_RESULTS:
+                        break
+    except Exception:
+        logging.exception("Search failed for %r", query)
+        return []
 
     logging.info(
         "Search mode=%s columns=%s query=%r results=%d",
